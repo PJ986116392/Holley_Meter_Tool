@@ -41,8 +41,88 @@ class holley_meter:
             self.logger.info("NACK")
             return False
 
+    def switch_baudrate(self, mode, baudrate=9600):
+        self.logger.info(f"切换波特率到 {mode} 模式")
+        mode_char = self.meter.MODE_CONTROL_CHARACTER[mode]
+        ack_message = messages.AckOptionSelectMessage(mode_char=mode_char, baud_char=self.meter.switchover_baudrate_char)
+        self.logger.info(f"Sending AckOptionsSelect message: {ack_message}")
+        # 发送波特率切换命令
+        self.meter.transport.send(ack_message.to_bytes())
+        self.meter.rest()
+        # 切换上位机波特率
+        self.meter.transport.port.baudrate = baudrate
+        self.logger.info(f"上位机波特率切换完成，当前波特率：{self.meter.transport.port.baudrate}")
+        # 等待电能表回应
+        pw_req = self.meter.read_response()
+
+        return pw_req
+
+    def password_auth(self, password) -> bool:
+        """密码认证"""
+        try:
+            # 构建密码命令 (01 50 31 02 28 30 30 30 30 30 30 30 30 29 03 61)
+            password_hex = password.encode('ascii').hex().upper()
+            cmd = bytes.fromhex(f"01 50 31 02 28 {password_hex} 29 03 61")
+            # 发送密码命令
+            meter.meter.rest()
+            self.meter.transport.send(cmd)
+            return self.is_ack()
+
+        except Exception as e:
+            self.logger.error(f"认证失败: {str(e)}")
+            return False
+    def enter_factory_mode(self, password="00000000"):
+        # 如果超过3秒没有操作，则重新握手和认证
+        if time.time() - self.last_time > 3:
+            # 300波特率握手
+            self.handshake()
+            # 波特率切换
+            self.switch_baudrate(mode="programming")
+            # 密码认证
+            self.password_auth(password)
+            # 进入工厂模式
+            self.meter.rest()
+        self.meter.write_single_value(address="A019", data="215A83D7")
+        is_ack = self.is_ack()
+        # 更新上一次操作时间
+        self.last_time = time.time()
+
+    def enter_second_pulse_mode(self,password="00000000"):
+        # 如果超过3秒没有操作，则重新握手和认证
+        if time.time() - self.last_time > 3:
+            # 300波特率握手
+            self.handshake()
+            # 波特率切换
+            self.switch_baudrate(mode="programming")
+            # 密码认证
+            self.password_auth(password)
+        # 进入工厂模式
+        self.meter.rest()
+        self.meter.transport.send(bytes.fromhex(f"01 45 31 02 38 30 2E 41 31 2E 30 28 29 03 3C"))
+        # self.meter.write_single_value(address="80.A1.0", data="")
+
+        is_ack = self.is_ack()
+        
+        self.meter.rest()
+        self.meter.transport.send(bytes.fromhex(f"01 42 30 03 71"))
+        # 更新上一次操作时间
+        self.last_time = time.time()
 
 
 
+if __name__ == "__main__":
+    meter = holley_meter(port='COM8')
+    time.sleep(4)
+    try:
+        meter.enter_factory_mode()
+        meter.enter_second_pulse_mode()
+        time.sleep(20)
+
+        meter.exit_factory_mode()
+
+
+    finally:
+        meter.meter.transport.send(bytes.fromhex(f"01 42 30 03 71"))
+        meter.meter.disconnect()
 
 
